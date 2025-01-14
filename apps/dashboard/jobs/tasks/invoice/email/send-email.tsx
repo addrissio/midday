@@ -22,7 +22,7 @@ export const sendInvoiceEmail = schemaTask({
     const { data: invoice } = await supabase
       .from("invoices")
       .select(
-        "id, token, sent_to, customer:customer_id(name, website, email), team:team_id(name, email)",
+        "id, token, customer:customer_id(name, website, email), team:team_id(name, email)",
       )
       .eq("id", invoiceId)
       .single();
@@ -32,10 +32,17 @@ export const sendInvoiceEmail = schemaTask({
       return;
     }
 
-    await resend.emails.send({
+    const customerEmail = invoice?.customer?.email;
+
+    if (!customerEmail) {
+      logger.error("Invoice customer email not found");
+      return;
+    }
+
+    const response = await resend.emails.send({
       from: "Midday <middaybot@midday.ai>",
-      to: invoice?.customer.email,
-      reply_to: invoice?.team.email,
+      to: customerEmail,
+      replyTo: invoice?.team.email ?? undefined,
       subject: `${invoice?.team.name} sent you an invoice`,
       headers: {
         "X-Entity-Ref-ID": nanoid(),
@@ -49,11 +56,22 @@ export const sendInvoiceEmail = schemaTask({
       ),
     });
 
+    if (response.error) {
+      logger.error("Invoice email failed to send", {
+        invoiceId,
+        error: response.error,
+      });
+
+      throw new Error("Invoice email failed to send");
+    }
+
+    logger.info("Invoice email sent");
+
     await supabase
       .from("invoices")
       .update({
         status: "unpaid",
-        sent_to: invoice?.customer.email,
+        sent_to: customerEmail,
       })
       .eq("id", invoiceId);
   },
